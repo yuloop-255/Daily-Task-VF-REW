@@ -1,0 +1,82 @@
+name: 🎮 Daily Task (Gemini API免费方案)
+
+on:
+  repository_dispatch:
+    types: [daily-task]
+  workflow_dispatch:
+  schedule:
+    - cron: '30 22,2,6,15,18 * * *'
+
+concurrency:
+  group: daily-task-run
+  cancel-in-progress: true
+
+jobs:
+  run-task:
+    name: 🎮 Daily Task
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+
+      - name: 2. 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 依赖缓存：pip 包 + Playwright 浏览器，命中缓存只需 ~20 秒 ──
+      - name: 3. 缓存 pip 包
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-v1-${{ runner.os }}-${{ hashFiles('.github/workflows/daily-task.yml') }}
+          restore-keys: pip-v1-${{ runner.os }}-
+
+      - name: 4. 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-v1-${{ runner.os }}-chromium
+          restore-keys: pw-v1-${{ runner.os }}-
+
+      - name: 5. 安装依赖（有缓存时秒过）
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U playwright requests pyyaml 'hcaptcha-challenger>=0.19'
+          python -m playwright install chromium --with-deps
+          echo "✅ Python 依赖完成"
+
+      - name: 6. 安装 Sing-Box（代理转换）
+        env:
+          PROXY_STR: ${{ secrets.TASK_PROXY_STR }}
+        run: |
+          if [ -n "$PROXY_STR" ]; then
+            curl -sL https://github.com/SagerNet/sing-box/releases/download/v1.9.3/sing-box-1.9.3-linux-amd64.tar.gz -o sb.tgz
+            tar -xzf sb.tgz
+            sudo cp sing-box-1.9.3-linux-amd64/sing-box /usr/local/bin/
+            echo "✅ Sing-Box 就绪"
+          else
+            echo "ℹ️ 未配置代理，跳过"
+          fi
+
+      # ── 执行任务：脚本内部自动轮换节点 + 轮换 Gemini Key ──
+      - name: 7. 执行任务
+        env:
+          ACCOUNTS:       ${{ secrets.TASK_ACCOUNTS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PROXY_STR:      ${{ secrets.TASK_PROXY_STR }}
+          TASK_LOGIN_URL:    ${{ secrets.TASK_LOGIN_URL }}
+          TASK_PROJECTS_URL: ${{ secrets.TASK_PROJECTS_URL }}
+          TG_BOT_TOKEN:   ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:     ${{ secrets.TG_CHAT_ID }}
+        run: python daily_task.py
+
+      - name: 8. 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: screenshots/
+          retention-days: 3
