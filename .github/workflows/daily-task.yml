@@ -5,7 +5,7 @@ on:
     types: [daily-task]
   workflow_dispatch:
   schedule:
-    - cron: '08 0,3,6,9,12,15,18,21 * * *'
+    - cron: '11 0,3,6,9,12,15,18,21 * * *'
 
 concurrency:
   group: daily-task-run
