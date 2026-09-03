@@ -1,0 +1,107 @@
+name: 🎮 Daily Task (Gemini免费方案)
+
+on:
+  repository_dispatch:
+    types: [daily-task]
+  workflow_dispatch:
+  schedule:
+    - cron: '30 1,5,9,13,17 * * *'
+
+concurrency:
+  group: daily-task-run
+  cancel-in-progress: true
+
+jobs:
+  run-task:
+    name: 🎮 Daily Task
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # 增加到45分钟
+
+    steps:
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+
+      - name: 2. 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 依赖缓存 ──
+      - name: 3. 缓存 pip 包
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-v1-${{ runner.os }}-${{ hashFiles('.github/workflows/daily-task.yml') }}
+          restore-keys: pip-v1-${{ runner.os }}-
+
+      - name: 4. 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-v1-${{ runner.os }}-chromium-v2
+          restore-keys: pw-v1-${{ runner.os }}-
+
+      - name: 5. 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U playwright requests pyyaml 'hcaptcha-challenger>=0.19' google-genai
+          python -m playwright install chromium --with-deps
+          echo "✅ Python 依赖完成"
+
+      - name: 6. 安装 Sing-Box
+        env:
+          PROXY_STR: ${{ secrets.TASK_PROXY_STR }}
+        run: |
+          if [ -n "$PROXY_STR" ]; then
+            curl -sL https://github.com/SagerNet/sing-box/releases/download/v1.9.3/sing-box-1.9.3-linux-amd64.tar.gz -o sb.tgz
+            tar -xzf sb.tgz
+            sudo cp sing-box-1.9.3-linux-amd64/sing-box /usr/local/bin/
+            echo "✅ Sing-Box 就绪"
+          else
+            echo "ℹ️ 未配置代理，跳过"
+          fi
+
+      # ── 执行任务（带重试机制）──
+      - name: 7. 执行任务
+        env:
+          ACCOUNTS:       ${{ secrets.TASK_ACCOUNTS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PROXY_STR:      ${{ secrets.TASK_PROXY_STR }}
+          TASK_LOGIN_URL:    ${{ secrets.TASK_LOGIN_URL }}
+          TASK_PROJECTS_URL: ${{ secrets.TASK_PROJECTS_URL }}
+          TG_BOT_TOKEN:   ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:     ${{ secrets.TG_CHAT_ID }}
+        run: |
+          # 添加任务级重试
+          for i in 1 2 3; do
+            echo "=========================================="
+            echo "🚀 第 $i 次运行尝试"
+            echo "=========================================="
+            
+            # 运行主脚本
+            python daily_task.py
+            
+            # 检查退出码
+            if [ $? -eq 0 ]; then
+              echo "✅ 任务成功完成"
+              exit 0
+            else
+              echo "❌ 任务失败（第 $i 次）"
+              if [ $i -lt 3 ]; then
+                echo "⏳ 等待 30 秒后重试..."
+                sleep 30
+              fi
+            fi
+          done
+          
+          echo "❌ 所有尝试均失败"
+          exit 1
+
+      - name: 8. 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: screenshots/
+          retention-days: 7  # 增加到7天
+          if-no-files-found: ignore
